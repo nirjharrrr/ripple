@@ -10,7 +10,7 @@ import {
   saveComment, removeComment,
   saveDecision, removeDecision, saveDiscussion, removeDiscussion,
   saveFile, removeFile, queueLength,
-  saveMessage, removeMessage, saveAssignmentNotice, currentUser,
+  saveMessage, removeMessage, saveAssignmentNotice, currentUser, setRoomMute,
 } from './api';
 import { computeRemindAt } from './status';
 
@@ -352,6 +352,15 @@ export function useStore() {
     commit({ ...dataRef.current, messages: dataRef.current.messages.filter((m) => m.id !== id) });
     removeMessage(id);
   }, [commit]);
+  // Mute/unmute a room's chat notifications for me — optimistic, then persist.
+  const muteRoom = useCallback((team_id, muted) => {
+    const me = currentUser();
+    const memberships = dataRef.current.memberships.map((m) =>
+      (m.team_id === team_id && (m.user_id === me?.id)) ? { ...m, muted: muted ? 'true' : '' } : m);
+    commit({ ...dataRef.current, memberships });
+    setRoomMute(team_id, muted).catch(() => { /* next full sync reconciles */ });
+  }, [commit]);
+
   // Merge freshly-polled messages into the cache without dropping optimistic ones.
   const mergeMessages = useCallback((incoming) => {
     if (!incoming || !incoming.length) return;
@@ -376,7 +385,7 @@ export function useStore() {
     addDecision, deleteDecision,
     addDiscussion, deleteDiscussion,
     addFile, deleteFile,
-    addMessage, deleteMessage, mergeMessages,
+    addMessage, deleteMessage, mergeMessages, muteRoom,
   };
 }
 

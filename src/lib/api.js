@@ -157,6 +157,7 @@ export async function verifyAdmin(team_id, adminPass) { return call({ action: 'v
 export async function addMember(team_id, adminPass, email) { return call({ action: 'addMember', team_id, adminPass, email }); }
 export async function removeMember(team_id, adminPass, membership_id) { return call({ action: 'removeMember', team_id, adminPass, membership_id }); }
 export async function setRole(team_id, adminPass, membership_id, role) { return call({ action: 'setRole', team_id, adminPass, membership_id, role }); }
+export async function setRoomMute(team_id, muted) { return call({ action: 'setMute', team_id, muted }); }
 export async function acceptInvite(invite_token) { return call({ action: 'acceptInvite', invite_token }); }
 export async function declineInvite(invite_token) { return call({ action: 'declineInvite', invite_token }); }
 // Fast-poll a room's messages created after `since` (ISO) — used while the Chat tab is open.

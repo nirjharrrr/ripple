@@ -691,3 +691,13 @@ html[data-theme="dark"] .ripple-logo-img { background: #fff; border-radius: 9px;
   .invites-banner { top: 60px; }
   .chat-msg { max-width: 88%; }
 }
+
+/* chat mute bar */
+.chat-bar { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 0 4px 8px; border-bottom: 1px solid var(--line-soft); margin-bottom: 4px; }
+.chat-bar-label { font-size: 12px; color: var(--ink-faint); }
+.chat-mute { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line);
+  background: var(--bg); color: var(--ink-soft); font-size: 12.5px; padding: 4px 10px;
+  border-radius: 16px; cursor: pointer; }
+.chat-mute:hover { border-color: var(--accent); color: var(--accent); }
+.chat-mute.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }

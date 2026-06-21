@@ -66,7 +66,7 @@ var MEMBER_SHEET = 'Memberships';
 // status: 'accepted' (full member) | 'pending' (invited, not yet joined).
 // invite_token gates the email accept link; invited_by/invited_at are for display.
 var MEMBER_COLS = ['id', 'team_id', 'user_id', 'email', 'name', 'role', 'created_at',
-                   'status', 'invite_token', 'invited_by', 'invited_at'];
+                   'status', 'invite_token', 'invited_by', 'invited_at', 'muted'];
 // Room (= team) sub-entities
 var DECISION_SHEET = 'Decisions';
 var DECISION_COLS = ['id', 'team_id', 'title', 'body', 'author', 'created_at', 'user_id'];
@@ -139,6 +139,7 @@ function handle(e) {
     if (action === 'addMember')      return json(addMember(body, userId));
     if (action === 'removeMember')   return json(removeMember(body, userId));
     if (action === 'setRole')        return json(setMemberRole(body, userId));
+    if (action === 'setMute')        return json(setMute(body.team_id, body.muted, userId));
     if (action === 'acceptInvite')   return json(acceptInvite(body.invite_token, userId));
     if (action === 'declineInvite')  return json(declineInvite(body.invite_token, userId));
     if (action === 'notifyAssignment') return json(notifyAssignment(body.task_id, body.assignee_id, userId, teamSet));
@@ -670,6 +671,36 @@ function setMemberRole(body, userId) {
   return { ok: true, data: 'role updated' };
 }
 
+// Mute/unmute a room's chat notifications for the calling user (own membership only).
+function setMute(teamId, muted, userId) {
+  if (!teamId) return { ok: false, error: 'room required' };
+  var u = getUserRow(userId);
+  var email = u ? String(u.email).toLowerCase() : '';
+  var sh = sheet(MEMBER_SHEET, MEMBER_COLS);
+  var rows = readSheet(MEMBER_SHEET, MEMBER_COLS);
+  var c = MEMBER_COLS.indexOf('muted') + 1;
+  var hit = false;
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i].team_id) === String(teamId) &&
+       (String(rows[i].user_id) === String(userId) || (email && String(rows[i].email).toLowerCase() === email))) {
+      sh.getRange(rows[i]._row, c).setValue(muted ? 'true' : '');
+      hit = true;
+    }
+  }
+  return hit ? { ok: true, data: { muted: !!muted } } : { ok: false, error: 'not a member' };
+}
+
+// Is this user's chat muted for the room?
+function isMuted(teamId, userId) {
+  var members = readSheet(MEMBER_SHEET, MEMBER_COLS);
+  for (var i = 0; i < members.length; i++) {
+    if (String(members[i].team_id) === String(teamId) && String(members[i].user_id) === String(userId)) {
+      return String(members[i].muted) === 'true';
+    }
+  }
+  return false;
+}
+
 // Link any pending memberships (added by email before the user existed) to this user.
 function linkMemberships(userId, email) {
   email = String(email || '').toLowerCase();
@@ -733,7 +764,8 @@ function postMessage(msg, userId, teamSet) {
   // @mention notifications: match @name / @email against accepted room members
   var mentioned = parseMentions(msg.body, msg.team_id);
   for (var i = 0; i < mentioned.length; i++) {
-    if (String(mentioned[i]) === String(userId)) continue; // never ping yourself
+    if (String(mentioned[i]) === String(userId)) continue;      // never ping yourself
+    if (isMuted(msg.team_id, mentioned[i])) continue;           // respect per-room mute
     notifyUser(mentioned[i], '💬 ' + (msg.author || 'Someone') + ' mentioned you', msg.body);
   }
   return { ok: true, id: msg.id, created_at: msg.created_at };
@@ -917,10 +949,10 @@ function nextOccurrence(from, recurrence) {
 // property so subsequent requests skip the work.
 function ensureMigrated() {
   var props = PropertiesService.getScriptProperties();
-  if (props.getProperty('schema_v10') === '1') return;
+  if (props.getProperty('schema_v11') === '1') return;
   migrate();
   backfillMemberStatus(); // existing members predate the invite flow → mark accepted
-  props.setProperty('schema_v10', '1');
+  props.setProperty('schema_v11', '1');
 }
 
 // Any membership row with a blank status predates invites — it's a real member.

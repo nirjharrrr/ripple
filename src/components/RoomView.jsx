@@ -117,6 +117,8 @@ function RoomNotes({ store, room }) {
 function RoomChat({ store, room, user, members, messages }) {
   const [text, setText] = useState('');
   const author = user?.name || user?.email;
+  const myMembership = members.find((m) => m.user_id === user?.id);
+  const muted = String(myMembership?.muted) === 'true';
   const sorted = [...messages].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
   const endRef = useRef(null);
   const lastSeen = useRef('');
@@ -159,6 +161,12 @@ function RoomChat({ store, room, user, members, messages }) {
 
   return (
     <div className="chat">
+      <div className="chat-bar">
+        <span className="chat-bar-label">{muted ? 'Notifications muted for this room' : 'You’re notified on @mentions'}</span>
+        <button className={`chat-mute ${muted ? 'on' : ''}`} onClick={() => store.muteRoom(room.id, !muted)} title={muted ? 'Unmute this room' : 'Mute @mention notifications'}>
+          <Icon name={muted ? 'belloff' : 'bell'} size={15} /> {muted ? 'Muted' : 'Mute'}
+        </button>
+      </div>
       <div className="chat-stream">
         {sorted.length === 0 && <div className="placeholder">No messages yet. Say hello 👋</div>}
         {sorted.map((m, i) => {
