@@ -10,6 +10,7 @@ import {
   saveComment, removeComment,
   saveDecision, removeDecision, saveDiscussion, removeDiscussion,
   saveFile, removeFile, queueLength,
+  saveMessage, removeMessage, saveAssignmentNotice, currentUser,
 } from './api';
 import { computeRemindAt } from './status';
 
@@ -57,14 +58,14 @@ export function useStore() {
       title, due_at = null, remind_offset = 0, recurrence = null,
       priority = 'normal', is_today = true, notes = '',
       project_id = '', tags = '', status = 'not_started', effort = '', estimate = '', goal_id = '', links = '',
-      assignee_id = '', team_id = '',
+      assignee_id = '', team_id = '', depends_on = '',
     } = input;
     const task = {
       id: uid(), title, notes, done: false, is_today,
       due_at, remind_offset, remind_at: computeRemindAt(due_at, remind_offset),
       recurrence, reminded: false, priority, archived: false,
       project_id, tags, status, effort, estimate, goal_id, links,
-      assignee_id, team_id,
+      assignee_id, team_id, depends_on,
       position: Date.now(), created_at: nowISO(), updated_at: nowISO(),
     };
     const next = { ...dataRef.current, tasks: [...dataRef.current.tasks, task] };
@@ -94,6 +95,14 @@ export function useStore() {
     commit({ ...dataRef.current, tasks });
     if (updated) saveTask(updated);
   }, [commit]);
+
+  // Assign (or reassign) a task and notify the new assignee — unless it's you.
+  const assignTask = useCallback((taskId, assigneeId, team_id) => {
+    const prev = dataRef.current.tasks.find((t) => t.id === taskId)?.assignee_id || '';
+    updateTask(taskId, { assignee_id: assigneeId, ...(team_id ? { team_id } : {}) });
+    const me = currentUser();
+    if (assigneeId && assigneeId !== prev && assigneeId !== me?.id) saveAssignmentNotice(taskId, assigneeId);
+  }, [updateTask]);
 
   const deleteTask = useCallback((id) => {
     const task = dataRef.current.tasks.find((t) => t.id === id);
@@ -332,10 +341,31 @@ export function useStore() {
     removeFile(id);
   }, [commit]);
 
+  // ---- room chat -----------------------------------------------------------
+  const addMessage = useCallback((team_id, body, author) => {
+    const m = { id: uid(), team_id, author: author || '', body, created_at: nowISO() };
+    commit({ ...dataRef.current, messages: [...dataRef.current.messages, m] });
+    saveMessage(m);
+    return m;
+  }, [commit]);
+  const deleteMessage = useCallback((id) => {
+    commit({ ...dataRef.current, messages: dataRef.current.messages.filter((m) => m.id !== id) });
+    removeMessage(id);
+  }, [commit]);
+  // Merge freshly-polled messages into the cache without dropping optimistic ones.
+  const mergeMessages = useCallback((incoming) => {
+    if (!incoming || !incoming.length) return;
+    const cur = dataRef.current;
+    const have = new Set(cur.messages.map((m) => m.id));
+    const fresh = incoming.filter((m) => !have.has(m.id));
+    if (!fresh.length) return;
+    commit({ ...cur, messages: [...cur.messages, ...fresh] });
+  }, [commit]);
+
   return {
     data, status, pendingWrites: queueLength(),
     refresh,
-    addTask, updateTask, deleteTask, restoreTask,
+    addTask, updateTask, deleteTask, restoreTask, assignTask,
     toggleTask, toggleToday, archiveCompleted, moveTask,
     addSubtask, updateSubtask, toggleSubtask, deleteSubtask,
     addProject, updateProject, deleteProject,
@@ -346,6 +376,7 @@ export function useStore() {
     addDecision, deleteDecision,
     addDiscussion, deleteDiscussion,
     addFile, deleteFile,
+    addMessage, deleteMessage, mergeMessages,
   };
 }
 

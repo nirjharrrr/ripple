@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { belongsToToday } from '../lib/status';
+import { unreadCount } from '../lib/chat';
 import Icon from './Icon';
 import RippleLogo from './RippleLogo';
 
@@ -16,6 +17,7 @@ const SECONDARY = [
 ];
 
 const MORE = [
+  { key: 'chains', label: 'Ripple Chains', icon: 'chain' },
   { key: 'board', label: 'Board', icon: 'board' },
   { key: 'timeline', label: 'Timeline', icon: 'timeline' },
   { key: 'goals', label: 'Goals', icon: 'goals' },
@@ -48,6 +50,11 @@ export default function Sidebar({ store, view, onSelectView, query, onQuery, use
 
   const is = (type, roomId) => view.type === type && (type !== 'room' || view.roomId === roomId);
   const rooms = (data.teams || []);
+  const unreadByRoom = useMemo(() => {
+    const out = {};
+    for (const r of rooms) out[r.id] = unreadCount(r.id, data.messages || [], user?.id);
+    return out;
+  }, [rooms, data.messages, user]);
 
   return (
     <aside className="sidebar">
@@ -78,6 +85,7 @@ export default function Sidebar({ store, view, onSelectView, query, onQuery, use
           <button key={r.id} className={`sb-item ${is('room', r.id) ? 'on' : ''}`} onClick={() => onSelectView({ type: 'room', roomId: r.id })}>
             <Icon name="rooms" className="sb-ico" />
             <span className="sb-label">{r.name}</span>
+            {unreadByRoom[r.id] > 0 && <span className="sb-chat-dot" title={`${unreadByRoom[r.id]} new message(s)`} />}
             {counts.byRoom[r.id] > 0 && <span className="sb-count">{counts.byRoom[r.id]}</span>}
           </button>
         ))}

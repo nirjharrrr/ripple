@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { parseQuickAdd } from '../lib/parse';
 import { subtasksFor } from '../lib/store';
+import { rippleBurst } from '../lib/chains';
 import { PRIORITY_LABEL, STATUSES, STATUS_LABEL } from '../lib/status';
 
 const PRIORITY_ORDER = ['high', 'normal', 'low'];
@@ -137,14 +138,31 @@ function TaskRow({ task, store, onSelect, selectedId }) {
   const project = store.data.projects.find((p) => p.id === task.project_id);
   const time = task.due_at ? new Date(task.due_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : null;
   const tags = (task.tags || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const prereq = task.depends_on ? store.data.tasks.find((p) => p.id === task.depends_on) : null;
+  const locked = prereq && !prereq.done && !task.done;
+
+  // swipe: right = complete, left = snooze to tomorrow (touch devices)
+  const [dx, setDx] = useState(0);
+  const sx = useRef(null), moved = useRef(false);
+  const tStart = (e) => { sx.current = e.touches[0].clientX; moved.current = false; };
+  const tMove = (e) => { if (sx.current == null) return; const d = e.touches[0].clientX - sx.current; if (Math.abs(d) > 8) moved.current = true; setDx(Math.max(-120, Math.min(120, d))); };
+  const tEnd = () => {
+    const d = dx; sx.current = null; setDx(0);
+    if (d > 60 && !task.done) store.toggleTask(task.id);
+    else if (d < -60) { const n = new Date(); n.setDate(n.getDate() + 1); n.setHours(9, 0, 0, 0); store.updateTask(task.id, { due_at: n.toISOString(), is_today: false }); }
+  };
 
   return (
-    <div className={`row ${selectedId === task.id ? 'sel' : ''} ${task.done ? 'done' : ''}`} onClick={() => onSelect(task.id)}>
+    <div className={`row ${selectedId === task.id ? 'sel' : ''} ${task.done ? 'done' : ''} ${locked ? 'locked' : ''}`}
+      style={dx ? { transform: `translateX(${dx}px)`, transition: 'none' } : undefined}
+      onTouchStart={tStart} onTouchMove={tMove} onTouchEnd={tEnd}
+      onClick={() => { if (moved.current) { moved.current = false; return; } onSelect(task.id); }}>
       <button
         className={`check ${task.done ? 'checked' : ''}`}
-        onClick={(e) => { e.stopPropagation(); store.toggleTask(task.id); }}
+        onClick={(e) => { e.stopPropagation(); if (!task.done) rippleBurst(e.currentTarget); store.toggleTask(task.id); }}
       />
       <span className="row-title">{task.title}</span>
+      {locked && <span className="lock-chip" title={`Locked until “${prereq.title}” is done`}>🔒</span>}
       {project && <span className="proj-chip" style={{ '--c': project.color }}>{project.name}</span>}
       {tags.map((t) => <span key={t} className="tag-chip">{t}</span>)}
       <span className="row-spacer" />

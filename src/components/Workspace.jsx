@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useStore } from '../lib/store';
-import { currentUser, logout } from '../lib/api';
+import { currentUser, logout, acceptInvite, declineInvite } from '../lib/api';
 import { startReminderWatch } from '../lib/notify';
 import { belongsToToday, priorityRank } from '../lib/status';
 import { getPrefs, setPrefs } from '../lib/settings';
@@ -20,6 +20,10 @@ import TimelineView from './TimelineView';
 import RoomsIndex from './RoomsIndex';
 import RoomView from './RoomView';
 import MyTasksView from './MyTasksView';
+import ChainsView from './ChainsView';
+import MobileNav from './MobileNav';
+import Icon from './Icon';
+import RippleLogo from './RippleLogo';
 
 const PLACEHOLDER = {};
 
@@ -54,6 +58,29 @@ export default function Workspace({ onSignOut }) {
   useEffect(() => {
     if (store.status === 'unauthorized') { logout().finally(onSignOut); }
   }, [store.status]); // eslint-disable-line
+
+  // redeem an emailed invite link once, after sign-in
+  const inviteRedeemed = useRef(false);
+  useEffect(() => {
+    if (inviteRedeemed.current) return;
+    const token = localStorage.getItem('ripple_pending_invite');
+    if (!token) return;
+    inviteRedeemed.current = true;
+    localStorage.removeItem('ripple_pending_invite');
+    acceptInvite(token)
+      .then((r) => store.refresh().then(() => r && r.team_id && selectView({ type: 'room', roomId: r.team_id })))
+      .catch(() => { /* invalid/expired link — ignore */ });
+  }, []); // eslint-disable-line
+
+  async function acceptRoomInvite(inv) {
+    await acceptInvite(inv.invite_token);
+    await store.refresh();
+    selectView({ type: 'room', roomId: inv.team_id });
+  }
+  async function declineRoomInvite(inv) {
+    await declineInvite(inv.invite_token);
+    await store.refresh();
+  }
 
   function selectView(v) {
     setView(v);
@@ -103,6 +130,7 @@ export default function Workspace({ onSignOut }) {
   else if (view.type === 'templates') mainContent = <TemplatesView store={store} onSelectTask={setSelectedId} />;
   else if (view.type === 'timeline') mainContent = <TimelineView store={store} onSelect={setSelectedId} />;
   else if (view.type === 'mytasks') mainContent = <MyTasksView store={store} user={user} onSelect={setSelectedId} selectedId={selectedId} />;
+  else if (view.type === 'chains') mainContent = <ChainsView store={store} onSelect={setSelectedId} selectedId={selectedId} />;
   else if (view.type === 'rooms') mainContent = <RoomsIndex store={store} startCreating={view.create} onOpenRoom={(id) => selectView({ type: 'room', roomId: id })} />;
   else if (view.type === 'room') {
     const room = (data.teams || []).find((r) => r.id === view.roomId);
@@ -122,9 +150,9 @@ export default function Workspace({ onSignOut }) {
   return (
     <div className={`workspace ${selectedTask ? 'with-detail' : ''} ${sbOpen ? 'sb-open' : ''}`}>
       <div className="mobilebar">
-        <button className="hamburger" onClick={() => setSbOpen((v) => !v)}>☰</button>
-        <span className="mobilebar-title">{cfg.title || 'Ripple'}</span>
-        <button className="hamburger" onClick={() => setPaletteOpen(true)}>🔍</button>
+        <button className="mb-btn" onClick={() => setSbOpen((v) => !v)} aria-label="Menu"><Icon name="menu" size={21} /></button>
+        <RippleLogo size={24} />
+        <button className="mb-btn" onClick={() => setPaletteOpen(true)} aria-label="Search"><Icon name="search" size={19} /></button>
       </div>
       <div className="sb-scrim" onClick={() => setSbOpen(false)} />
 
@@ -132,13 +160,36 @@ export default function Workspace({ onSignOut }) {
         user={user} onSignOut={handleSignOut} onOpenSettings={() => setSettingsOpen(true)}
         status={store.status} pending={store.pendingWrites} />
 
+      {(data.invites || []).length > 0 && (
+        <InvitesBanner invites={data.invites} onAccept={acceptRoomInvite} onDecline={declineRoomInvite} />
+      )}
+
       {mainContent}
 
       {selectedTask && <DetailPanel store={store} task={selectedTask} user={user} onClose={() => setSelectedId(null)} />}
 
+      <MobileNav view={view} onSelectView={selectView} onAdd={() => setPaletteOpen(true)} onProfile={() => setSettingsOpen(true)} />
+
       {paletteOpen && <CommandPalette commands={commands} onClose={() => setPaletteOpen(false)} />}
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
       {focusTask && <FocusMode store={store} task={focusTask} onClose={() => setFocusId(null)} />}
+    </div>
+  );
+}
+
+function InvitesBanner({ invites, onAccept, onDecline }) {
+  return (
+    <div className="invites-banner">
+      {invites.map((inv) => (
+        <div className="invite-card" key={inv.invite_token}>
+          <span className="invite-ico"><Icon name="rooms" size={18} /></span>
+          <div className="invite-text">
+            <b>{inv.invited_by_name || 'Someone'}</b> invited you to join <b>“{inv.team_name}”</b>
+          </div>
+          <button className="btn-primary invite-accept" onClick={() => onAccept(inv)}>Accept</button>
+          <button className="btn-ghost invite-decline" onClick={() => onDecline(inv)}>Decline</button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -192,6 +243,7 @@ function buildView(view, data, query) {
     case 'habits': return { title: 'Habits', groupBy: 'none', tasks: [], newTaskDefaults: null };
     case 'templates': return { title: 'Templates', groupBy: 'none', tasks: [], newTaskDefaults: null };
     case 'timeline': return { title: 'Timeline', groupBy: 'none', tasks: [], newTaskDefaults: null };
+    case 'chains': return { title: 'Ripple Chains', groupBy: 'none', tasks: [], newTaskDefaults: null };
     case 'rooms': return { title: 'Rooms', groupBy: 'none', tasks: [], newTaskDefaults: null };
     case 'room': return { title: (data.teams || []).find((r) => r.id === view.roomId)?.name || 'Room', groupBy: 'none', tasks: [], newTaskDefaults: null };
     case 'completed': return { title: 'Completed', subtitle: 'Recently finished', groupBy: 'none', tasks: data.tasks.filter((t) => t.done && !t.archived && match(t)).sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || '')), newTaskDefaults: null };

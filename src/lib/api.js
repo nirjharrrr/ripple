@@ -77,7 +77,7 @@ export async function logout() {
 }
 
 // --- local cache ------------------------------------------------------------
-const EMPTY = { tasks: [], subtasks: [], projects: [], notes: [], goals: [], habits: [], comments: [], teams: [], memberships: [], decisions: [], discussions: [], files: [] };
+const EMPTY = { tasks: [], subtasks: [], projects: [], notes: [], goals: [], habits: [], comments: [], teams: [], memberships: [], invites: [], decisions: [], discussions: [], files: [], messages: [] };
 
 export function readCache() {
   try {
@@ -141,9 +141,11 @@ export async function pull() {
     comments: data.comments || [],
     teams: data.teams || [],
     memberships: data.memberships || [],
+    invites: data.invites || [],
     decisions: data.decisions || [],
     discussions: data.discussions || [],
     files: data.files || [],
+    messages: data.messages || [],
   };
   writeCache(normalized);
   return normalized;
@@ -155,6 +157,10 @@ export async function verifyAdmin(team_id, adminPass) { return call({ action: 'v
 export async function addMember(team_id, adminPass, email) { return call({ action: 'addMember', team_id, adminPass, email }); }
 export async function removeMember(team_id, adminPass, membership_id) { return call({ action: 'removeMember', team_id, adminPass, membership_id }); }
 export async function setRole(team_id, adminPass, membership_id, role) { return call({ action: 'setRole', team_id, adminPass, membership_id, role }); }
+export async function acceptInvite(invite_token) { return call({ action: 'acceptInvite', invite_token }); }
+export async function declineInvite(invite_token) { return call({ action: 'declineInvite', invite_token }); }
+// Fast-poll a room's messages created after `since` (ISO) — used while the Chat tab is open.
+export async function fetchRoomMessages(team_id, since) { return call({ action: 'roomMessages', team_id, since }); }
 
 export async function ping() {
   return call({ action: 'ping' });
@@ -180,6 +186,10 @@ export function saveDiscussion(discussion) { enqueue({ action: 'upsertDiscussion
 export function removeDiscussion(id) { enqueue({ action: 'deleteDiscussion', id }); }
 export function saveFile(file) { enqueue({ action: 'upsertFile', file }); }
 export function removeFile(id) { enqueue({ action: 'deleteFile', id }); }
+export function saveMessage(message) { enqueue({ action: 'upsertMessage', message }); }
+export function removeMessage(id) { enqueue({ action: 'deleteMessage', id }); }
+// Queued so it runs AFTER the task upsert that triggered it (preserves order).
+export function saveAssignmentNotice(task_id, assignee_id) { enqueue({ action: 'notifyAssignment', task_id, assignee_id }); }
 
 // Sheets store booleans as strings sometimes — coerce to real types.
 function normalizeTask(t) {
@@ -202,6 +212,7 @@ function normalizeTask(t) {
     estimate: t.estimate || '',
     goal_id: t.goal_id || '',
     links: t.links || '',
+    depends_on: t.depends_on || '',
   };
 }
 

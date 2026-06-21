@@ -31,6 +31,9 @@ var REMINDER_EMAIL = '';
 // which signs + sends them with VAPID (Apps Script can't do ECDSA).
 var SEND_PUSH_URL = 'https://ripple-b0912a.netlify.app/.netlify/functions/send-push';
 
+// Where the app lives — used to build invite accept links in emails.
+var APP_URL = 'https://ripple-b0912a.netlify.app';
+
 var TASK_SHEET = 'Tasks';
 var SUB_SHEET = 'Subtasks';
 var USER_SHEET = 'Users';
@@ -46,7 +49,7 @@ var TASK_COLS = ['id', 'title', 'notes', 'done', 'is_today', 'remind_at',
                  'recurrence', 'position', 'reminded', 'created_at', 'updated_at',
                  'due_at', 'remind_offset', 'priority', 'archived', 'user_id',
                  'project_id', 'tags', 'status', 'effort', 'estimate', 'goal_id', 'links',
-                 'assignee_id', 'team_id'];
+                 'assignee_id', 'team_id', 'depends_on'];
 var SUB_COLS = ['id', 'task_id', 'title', 'done', 'position', 'created_at', 'user_id'];
 var USER_COLS = ['id', 'name', 'email', 'pass_hash', 'salt', 'created_at'];
 var SESSION_COLS = ['token', 'user_id', 'created_at'];
@@ -60,7 +63,10 @@ var PUSHSUB_COLS = ['id', 'user_id', 'endpoint', 'p256dh', 'auth', 'created_at']
 var TEAM_SHEET = 'Teams';
 var TEAM_COLS = ['id', 'name', 'owner_id', 'admin_pass_hash', 'salt', 'created_at'];
 var MEMBER_SHEET = 'Memberships';
-var MEMBER_COLS = ['id', 'team_id', 'user_id', 'email', 'name', 'role', 'created_at'];
+// status: 'accepted' (full member) | 'pending' (invited, not yet joined).
+// invite_token gates the email accept link; invited_by/invited_at are for display.
+var MEMBER_COLS = ['id', 'team_id', 'user_id', 'email', 'name', 'role', 'created_at',
+                   'status', 'invite_token', 'invited_by', 'invited_at'];
 // Room (= team) sub-entities
 var DECISION_SHEET = 'Decisions';
 var DECISION_COLS = ['id', 'team_id', 'title', 'body', 'author', 'created_at', 'user_id'];
@@ -68,6 +74,8 @@ var DISCUSSION_SHEET = 'Discussions';
 var DISCUSSION_COLS = ['id', 'team_id', 'parent_id', 'body', 'author', 'created_at', 'user_id'];
 var FILE_SHEET = 'Files';
 var FILE_COLS = ['id', 'team_id', 'name', 'url', 'created_at', 'user_id'];
+var MESSAGE_SHEET = 'Messages';
+var MESSAGE_COLS = ['id', 'team_id', 'user_id', 'author', 'body', 'created_at'];
 
 // ---------------------------------------------------------------------------
 // HTTP entry points
@@ -118,6 +126,7 @@ function handle(e) {
 
     if (action === 'me')            return json({ ok: true, data: currentUser(userId) });
     if (action === 'logout')        return json({ ok: true, data: logout(body.token) });
+    if (action === 'deleteAccount') return json({ ok: true, data: deleteAccount(userId) });
     if (action === 'list')          return json({ ok: true, data: listAll(userId) });
     if (action === 'upsertTask')    return json({ ok: true, data: upsertShared(TASK_SHEET, TASK_COLS, body.task, userId, teamSet) });
     if (action === 'deleteTask')    return json({ ok: true, data: deleteTask(body.id, userId, teamSet) });
@@ -130,6 +139,12 @@ function handle(e) {
     if (action === 'addMember')      return json(addMember(body, userId));
     if (action === 'removeMember')   return json(removeMember(body, userId));
     if (action === 'setRole')        return json(setMemberRole(body, userId));
+    if (action === 'acceptInvite')   return json(acceptInvite(body.invite_token, userId));
+    if (action === 'declineInvite')  return json(declineInvite(body.invite_token, userId));
+    if (action === 'notifyAssignment') return json(notifyAssignment(body.task_id, body.assignee_id, userId, teamSet));
+    if (action === 'upsertMessage')  return json({ ok: true, data: postMessage(body.message, userId, teamSet) });
+    if (action === 'deleteMessage')  return json({ ok: true, data: deleteRoomEntity(MESSAGE_SHEET, MESSAGE_COLS, body.id, userId, teamSet) });
+    if (action === 'roomMessages')   return json({ ok: true, data: roomMessages(body.team_id, body.since, userId, teamSet) });
     if (action === 'upsertDecision')   return json({ ok: true, data: upsertRoomEntity(DECISION_SHEET, DECISION_COLS, body.decision, userId, teamSet) });
     if (action === 'deleteDecision')   return json({ ok: true, data: deleteRoomEntity(DECISION_SHEET, DECISION_COLS, body.id, userId, teamSet) });
     if (action === 'upsertDiscussion') return json({ ok: true, data: upsertRoomEntity(DISCUSSION_SHEET, DISCUSSION_COLS, body.discussion, userId, teamSet) });
@@ -228,6 +243,29 @@ function logout(token) {
   return { ok: true };
 }
 
+// Self-service account deletion: removes ALL of the caller's own data, the
+// rooms they own, and their account. Strictly self-scoped (uses the resolved
+// session userId), so it can only ever delete your own account.
+function deleteAccount(userId) {
+  var owned = [
+    [TASK_SHEET, TASK_COLS], [SUB_SHEET, SUB_COLS], [PROJECT_SHEET, PROJECT_COLS],
+    [NOTE_SHEET, NOTE_COLS], [GOAL_SHEET, GOAL_COLS], [HABIT_SHEET, HABIT_COLS],
+    [COMMENT_SHEET, COMMENT_COLS], [DECISION_SHEET, DECISION_COLS],
+    [DISCUSSION_SHEET, DISCUSSION_COLS], [FILE_SHEET, FILE_COLS], [MESSAGE_SHEET, MESSAGE_COLS],
+    [PUSHSUB_SHEET, PUSHSUB_COLS], [MEMBER_SHEET, MEMBER_COLS], [SESSION_SHEET, SESSION_COLS],
+  ];
+  owned.forEach(function (pair) {
+    var sh = sheet(pair[0], pair[1]);
+    var rows = readSheet(pair[0], pair[1]);
+    for (var i = rows.length - 1; i >= 0; i--) if (String(rows[i].user_id) === String(userId)) sh.deleteRow(rows[i]._row);
+  });
+  var tsh = sheet(TEAM_SHEET, TEAM_COLS), teams = readSheet(TEAM_SHEET, TEAM_COLS);
+  for (var t = teams.length - 1; t >= 0; t--) if (String(teams[t].owner_id) === String(userId)) tsh.deleteRow(teams[t]._row);
+  var ush = sheet(USER_SHEET, USER_COLS), users = readSheet(USER_SHEET, USER_COLS);
+  for (var u = users.length - 1; u >= 0; u--) if (String(users[u].id) === String(userId)) ush.deleteRow(users[u]._row);
+  return 'account deleted';
+}
+
 function currentUser(userId) {
   var users = readSheet(USER_SHEET, USER_COLS);
   for (var i = 0; i < users.length; i++) {
@@ -303,6 +341,7 @@ function colsFor(name) {
   if (name === DECISION_SHEET) return DECISION_COLS;
   if (name === DISCUSSION_SHEET) return DISCUSSION_COLS;
   if (name === FILE_SHEET) return FILE_COLS;
+  if (name === MESSAGE_SHEET) return MESSAGE_COLS;
   return [];
 }
 
@@ -349,11 +388,18 @@ function teamSetFor(userId) {
   for (var i = 0; i < teams.length; i++) if (String(teams[i].owner_id) === String(userId)) set[String(teams[i].id)] = true;
   var members = readSheet(MEMBER_SHEET, MEMBER_COLS);
   for (var j = 0; j < members.length; j++) {
+    // pending invites do NOT grant access — only accepted (or legacy blank) ones
+    var status = String(members[j].status || 'accepted');
+    if (status === 'pending') continue;
     if (String(members[j].user_id) === String(userId) || (email && String(members[j].email).toLowerCase() === email)) {
       set[String(members[j].team_id)] = true;
     }
   }
   return set;
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // Can this user touch the given task (owner / assignee / same team)?
@@ -457,7 +503,22 @@ function listAll(userId) {
   // teams I'm in (strip secrets) + their full member rosters
   var teams = readSheet(TEAM_SHEET, TEAM_COLS).filter(function (tm) { return teamSet[String(tm.id)]; })
     .map(function (tm) { return { id: tm.id, name: tm.name, owner_id: tm.owner_id, created_at: tm.created_at }; });
-  var memberships = readSheet(MEMBER_SHEET, MEMBER_COLS).filter(function (m) { return teamSet[String(m.team_id)]; }).map(stripRow);
+  // roster for rooms I'm in — drop the secret invite_token before sending out
+  var memberships = readSheet(MEMBER_SHEET, MEMBER_COLS).filter(function (m) { return teamSet[String(m.team_id)]; })
+    .map(function (m) { var c = stripRow(m); delete c.invite_token; if (!c.status) c.status = 'accepted'; return c; });
+
+  // pending invitations addressed to me (by bound user_id or by email)
+  var u = getUserRow(userId);
+  var myEmail = u ? String(u.email).toLowerCase() : '';
+  var invites = readSheet(MEMBER_SHEET, MEMBER_COLS).filter(function (m) {
+    return String(m.status) === 'pending' &&
+      (String(m.user_id) === String(userId) || (myEmail && String(m.email).toLowerCase() === myEmail));
+  }).map(function (m) {
+    var t = getTeamRow(m.team_id);
+    var inv = m.invited_by ? getUserRow(m.invited_by) : null;
+    return { invite_token: m.invite_token, team_id: m.team_id, team_name: t ? t.name : 'a room',
+             invited_by_name: inv ? (inv.name || inv.email) : '', invited_at: m.invited_at };
+  });
 
   var inRoom = function (r) { return r.team_id && teamSet[String(r.team_id)]; };
   return {
@@ -470,9 +531,11 @@ function listAll(userId) {
     comments: comments.map(stripRow),
     teams: teams,
     memberships: memberships,
+    invites: invites,
     decisions: readSheet(DECISION_SHEET, DECISION_COLS).filter(inRoom).map(stripRow),
     discussions: readSheet(DISCUSSION_SHEET, DISCUSSION_COLS).filter(inRoom).map(stripRow),
     files: readSheet(FILE_SHEET, FILE_COLS).filter(inRoom).map(stripRow),
+    messages: readSheet(MESSAGE_SHEET, MESSAGE_COLS).filter(inRoom).map(stripRow),
   };
 }
 
@@ -497,7 +560,8 @@ function createTeam(body, userId) {
   var u = getUserRow(userId);
   upsertRow(MEMBER_SHEET, MEMBER_COLS, {
     id: Utilities.getUuid(), team_id: team.id, user_id: userId,
-    email: u ? u.email : '', name: u ? u.name : '', role: 'admin', created_at: new Date().toISOString(),
+    email: u ? u.email : '', name: u ? u.name : '', role: 'admin',
+    created_at: new Date().toISOString(), status: 'accepted',
   });
   return { ok: true, data: { id: team.id, name: team.name, owner_id: userId } };
 }
@@ -506,22 +570,86 @@ function verifyAdmin(body, userId) {
   return { ok: true, data: { valid: teamAdminOK(body.team_id, userId, body.adminPass) } };
 }
 
+// Invite a member by email. Creates a PENDING membership with a secret token and
+// emails an accept link. They join the room only after accepting (acceptInvite).
 function addMember(body, userId) {
   if (!teamAdminOK(body.team_id, userId, body.adminPass)) return { ok: false, error: 'admin password incorrect' };
   var email = String(body.email || '').trim().toLowerCase();
   if (!email) return { ok: false, error: 'email required' };
+  var team = getTeamRow(body.team_id);
   var members = readSheet(MEMBER_SHEET, MEMBER_COLS);
   for (var i = 0; i < members.length; i++) {
     if (String(members[i].team_id) === String(body.team_id) && String(members[i].email).toLowerCase() === email) {
-      return { ok: true, data: 'already a member' };
+      var st = String(members[i].status || 'accepted');
+      if (st === 'accepted') return { ok: true, data: 'already a member' };
+      // re-send the existing pending invite
+      sendInviteEmail(email, team, members[i].invite_token, userId);
+      return { ok: true, data: 'invite re-sent' };
     }
   }
   var u = findUserByEmail(email);
+  var token = newToken();
   upsertRow(MEMBER_SHEET, MEMBER_COLS, {
     id: Utilities.getUuid(), team_id: body.team_id, user_id: u ? u.id : '',
-    email: email, name: u ? u.name : (body.name || ''), role: 'member', created_at: new Date().toISOString(),
+    email: email, name: u ? u.name : (body.name || ''), role: 'member',
+    created_at: new Date().toISOString(), status: 'pending',
+    invite_token: token, invited_by: userId, invited_at: new Date().toISOString(),
   });
-  return { ok: true, data: u ? 'added' : 'invited (they’ll join when they register/sign in)' };
+  var sent = sendInviteEmail(email, team, token, userId);
+  return { ok: true, data: sent ? 'invite sent' : 'invited (email could not be sent — they can still accept in-app)' };
+}
+
+// Email the invitee an accept link. Returns true if the email went out.
+function sendInviteEmail(email, team, token, inviterId) {
+  var inviter = getUserRow(inviterId);
+  var who = inviter ? (inviter.name || inviter.email) : 'Someone';
+  var roomName = team ? team.name : 'a Ripple room';
+  var link = APP_URL + '/?invite=' + encodeURIComponent(token);
+  try {
+    MailApp.sendEmail({
+      to: email,
+      subject: who + ' invited you to “' + roomName + '” on Ripple',
+      htmlBody:
+        '<div style="font-family:Inter,Arial,sans-serif;color:#16324F">' +
+        '<p style="font-size:16px"><b>' + escapeHtml(who) + '</b> invited you to join the room ' +
+        '<b>“' + escapeHtml(roomName) + '”</b> on Ripple.</p>' +
+        '<p><a href="' + link + '" style="display:inline-block;background:#2E84A7;color:#fff;' +
+        'text-decoration:none;padding:11px 22px;border-radius:10px;font-weight:600">Accept invitation</a></p>' +
+        '<p style="color:#5b7184;font-size:13px">Or paste this link into your browser:<br>' + link + '</p>' +
+        '<p style="color:#94a3b8;font-size:12px">If you didn’t expect this, you can ignore this email.</p>' +
+        '<p style="color:#94a3b8;font-size:12px">— Ripple · Create momentum</p></div>',
+      body: who + ' invited you to join “' + roomName + '” on Ripple.\n\nAccept: ' + link + '\n\n— Ripple',
+    });
+    return true;
+  } catch (e) { return false; }
+}
+
+// Accept an invite: bind the membership to this user and mark it accepted.
+function acceptInvite(token, userId) {
+  if (!token) return { ok: false, error: 'missing token' };
+  var sh = sheet(MEMBER_SHEET, MEMBER_COLS);
+  var rows = readSheet(MEMBER_SHEET, MEMBER_COLS);
+  var u = getUserRow(userId);
+  for (var i = 0; i < rows.length; i++) {
+    if (String(rows[i].invite_token) === String(token)) {
+      sh.getRange(rows[i]._row, MEMBER_COLS.indexOf('user_id') + 1).setValue(userId);
+      sh.getRange(rows[i]._row, MEMBER_COLS.indexOf('status') + 1).setValue('accepted');
+      if (u && u.name) sh.getRange(rows[i]._row, MEMBER_COLS.indexOf('name') + 1).setValue(u.name);
+      return { ok: true, data: { team_id: rows[i].team_id } };
+    }
+  }
+  return { ok: false, error: 'invite not found or already used' };
+}
+
+// Decline an invite: remove the pending membership row.
+function declineInvite(token, userId) {
+  if (!token) return { ok: false, error: 'missing token' };
+  var sh = sheet(MEMBER_SHEET, MEMBER_COLS);
+  var rows = readSheet(MEMBER_SHEET, MEMBER_COLS);
+  for (var i = rows.length - 1; i >= 0; i--) {
+    if (String(rows[i].invite_token) === String(token) && String(rows[i].status) === 'pending') sh.deleteRow(rows[i]._row);
+  }
+  return { ok: true, data: 'declined' };
 }
 
 function removeMember(body, userId) {
@@ -551,6 +679,92 @@ function linkMemberships(userId, email) {
   for (var i = 0; i < rows.length; i++) {
     if (!String(rows[i].user_id) && String(rows[i].email).toLowerCase() === email) sh.getRange(rows[i]._row, c).setValue(userId);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Notifications — email (MailApp) + lock-screen push (Netlify function).
+// ---------------------------------------------------------------------------
+function pushSubsFor(userId) {
+  return readSheet(PUSHSUB_SHEET, PUSHSUB_COLS).filter(function (s) { return String(s.user_id) === String(userId); });
+}
+
+// Notify a single user by email + push. Best-effort; never throws.
+function notifyUser(userId, title, body) {
+  var u = getUserRow(userId);
+  if (u && u.email) {
+    try { MailApp.sendEmail({ to: u.email, subject: title, body: body + '\n\n— Ripple' }); } catch (e) { /* quota */ }
+  }
+  var subs = pushSubsFor(userId);
+  if (subs.length) sendPush(subs, title, body);
+}
+
+// Fired by the client when a task's assignee changes. Validates that both the
+// caller and the assignee belong to the task's room, then notifies the assignee.
+function notifyAssignment(taskId, assigneeId, userId, teamSet) {
+  if (!taskId || !assigneeId) return { ok: false, error: 'task and assignee required' };
+  if (String(assigneeId) === String(userId)) return { ok: true, data: 'self — skipped' }; // never notify yourself
+  var task = null, rows = readSheet(TASK_SHEET, TASK_COLS);
+  for (var i = 0; i < rows.length; i++) if (String(rows[i].id) === String(taskId)) { task = rows[i]; break; }
+  if (!task) return { ok: false, error: 'task not found' };
+  // caller must be able to touch the task (owner / assignee / room member)
+  var allowed = String(task.user_id) === String(userId) || (task.team_id && teamSet[String(task.team_id)]);
+  if (!allowed) return { ok: false, error: 'forbidden' };
+  // assignee must actually be an accepted member of the task's room (if any)
+  if (task.team_id && !teamSetFor(assigneeId)[String(task.team_id)]) return { ok: false, error: 'assignee not in room' };
+  var assigner = getUserRow(userId);
+  var who = assigner ? (assigner.name || assigner.email) : 'Someone';
+  notifyUser(assigneeId, '📌 New task assigned: ' + task.title, who + ' assigned you “' + task.title + '” in Ripple.');
+  return { ok: true, data: 'notified' };
+}
+
+// ---------------------------------------------------------------------------
+// Room chat — messages live in the Messages sheet, gated by room membership.
+// ---------------------------------------------------------------------------
+function postMessage(msg, userId, teamSet) {
+  msg = msg || {};
+  if (!msg.team_id || !teamSet[String(msg.team_id)]) return { ok: false, error: 'forbidden' };
+  if (!String(msg.body || '').trim()) return { ok: false, error: 'empty' };
+  msg.user_id = userId;
+  if (!msg.created_at) msg.created_at = new Date().toISOString();
+  upsertRow(MESSAGE_SHEET, MESSAGE_COLS, {
+    id: msg.id || Utilities.getUuid(), team_id: msg.team_id, user_id: userId,
+    author: msg.author || '', body: msg.body, created_at: msg.created_at,
+  });
+  // @mention notifications: match @name / @email against accepted room members
+  var mentioned = parseMentions(msg.body, msg.team_id);
+  for (var i = 0; i < mentioned.length; i++) {
+    if (String(mentioned[i]) === String(userId)) continue; // never ping yourself
+    notifyUser(mentioned[i], '💬 ' + (msg.author || 'Someone') + ' mentioned you', msg.body);
+  }
+  return { ok: true, id: msg.id, created_at: msg.created_at };
+}
+
+// Resolve @tokens in a message to member user_ids (best match on name/email local part).
+function parseMentions(body, teamId) {
+  var out = [], text = String(body || '');
+  var tokens = text.match(/@([a-z0-9._-]+)/gi);
+  if (!tokens) return out;
+  var members = readSheet(MEMBER_SHEET, MEMBER_COLS).filter(function (m) {
+    return String(m.team_id) === String(teamId) && String(m.status || 'accepted') !== 'pending' && m.user_id;
+  });
+  tokens.forEach(function (tok) {
+    var t = tok.slice(1).toLowerCase();
+    for (var i = 0; i < members.length; i++) {
+      var name = String(members[i].name || '').toLowerCase().replace(/\s+/g, '');
+      var local = String(members[i].email || '').toLowerCase().split('@')[0];
+      if (name === t || local === t) { if (out.indexOf(members[i].user_id) === -1) out.push(members[i].user_id); break; }
+    }
+  });
+  return out;
+}
+
+// Fast-poll endpoint: messages for a room created after `since` (ISO string).
+function roomMessages(teamId, since, userId, teamSet) {
+  if (!teamId || !teamSet[String(teamId)]) return { messages: [] };
+  var all = readSheet(MESSAGE_SHEET, MESSAGE_COLS).filter(function (m) {
+    return String(m.team_id) === String(teamId) && (!since || String(m.created_at) > String(since));
+  }).map(stripRow);
+  return { messages: all };
 }
 
 function stripRow(o) { var c = Object.assign({}, o); delete c._row; return c; }
@@ -703,9 +917,20 @@ function nextOccurrence(from, recurrence) {
 // property so subsequent requests skip the work.
 function ensureMigrated() {
   var props = PropertiesService.getScriptProperties();
-  if (props.getProperty('schema_v8') === '1') return;
+  if (props.getProperty('schema_v10') === '1') return;
   migrate();
-  props.setProperty('schema_v8', '1');
+  backfillMemberStatus(); // existing members predate the invite flow → mark accepted
+  props.setProperty('schema_v10', '1');
+}
+
+// Any membership row with a blank status predates invites — it's a real member.
+function backfillMemberStatus() {
+  var sh = sheet(MEMBER_SHEET, MEMBER_COLS);
+  var rows = readSheet(MEMBER_SHEET, MEMBER_COLS);
+  var c = MEMBER_COLS.indexOf('status') + 1;
+  for (var i = 0; i < rows.length; i++) {
+    if (!String(rows[i].status || '').trim()) sh.getRange(rows[i]._row, c).setValue('accepted');
+  }
 }
 
 // Idempotent: ensure all sheets exist and have every column. Safe to call
@@ -726,6 +951,7 @@ function migrate() {
   sheet(DECISION_SHEET, DECISION_COLS);
   sheet(DISCUSSION_SHEET, DISCUSSION_COLS);
   sheet(FILE_SHEET, FILE_COLS);
+  sheet(MESSAGE_SHEET, MESSAGE_COLS);
   migrateHeaders(TASK_SHEET, TASK_COLS);
   migrateHeaders(SUB_SHEET, SUB_COLS);
   migrateHeaders(USER_SHEET, USER_COLS);
@@ -742,6 +968,7 @@ function migrate() {
   migrateHeaders(DECISION_SHEET, DECISION_COLS);
   migrateHeaders(DISCUSSION_SHEET, DISCUSSION_COLS);
   migrateHeaders(FILE_SHEET, FILE_COLS);
+  migrateHeaders(MESSAGE_SHEET, MESSAGE_COLS);
   return 'migrated: sheets + columns ready';
 }
 

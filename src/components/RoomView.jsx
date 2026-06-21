@@ -1,9 +1,10 @@
-import { useState } from 'react';
-import { verifyAdmin, addMember, removeMember, setRole } from '../lib/api';
+import { useEffect, useRef, useState } from 'react';
+import { verifyAdmin, addMember, removeMember, setRole, fetchRoomMessages } from '../lib/api';
+import { markRoomRead } from '../lib/chat';
 import TaskList from './TaskList';
 import Icon from './Icon';
 
-const TABS = ['Overview', 'Tasks', 'Notes', 'Discussions', 'Decisions', 'Files', 'Members'];
+const TABS = ['Overview', 'Tasks', 'Chat', 'Notes', 'Decisions', 'Files', 'Members'];
 
 export default function RoomView({ store, room, user, onSelect, selectedId }) {
   const [tab, setTab] = useState('Overview');
@@ -15,7 +16,7 @@ export default function RoomView({ store, room, user, onSelect, selectedId }) {
   const members = (store.data.memberships || []).filter((m) => m.team_id === room.id);
   const decisions = (store.data.decisions || []).filter((d) => d.team_id === room.id);
   const files = (store.data.files || []).filter((f) => f.team_id === room.id);
-  const threads = (store.data.discussions || []).filter((d) => d.team_id === room.id && !d.parent_id);
+  const messages = (store.data.messages || []).filter((m) => m.team_id === room.id);
   const lastActivity = roomTasks.map((t) => t.updated_at).filter(Boolean).sort().slice(-1)[0];
 
   return (
@@ -24,7 +25,7 @@ export default function RoomView({ store, room, user, onSelect, selectedId }) {
         <div className="room-title"><span className="room-badge"><Icon name="rooms" size={18} /></span><h1>{room.name}</h1></div>
         <div className="room-tabs">
           {TABS.map((t) => {
-            const n = t === 'Members' ? members.length : t === 'Decisions' ? decisions.length : t === 'Files' ? files.length : t === 'Discussions' ? threads.length : 0;
+            const n = t === 'Members' ? members.length : t === 'Decisions' ? decisions.length : t === 'Files' ? files.length : t === 'Chat' ? messages.length : 0;
             return <button key={t} className={tab === t ? 'on' : ''} onClick={() => setTab(t)}>{t}{n ? ` ${n}` : ''}</button>;
           })}
         </div>
@@ -45,7 +46,7 @@ export default function RoomView({ store, room, user, onSelect, selectedId }) {
             <button onClick={() => setTab('Tasks')}><Icon name="plus" size={15} /> Add task</button>
             <button onClick={() => setTab('Notes')}><Icon name="notes" size={15} /> Create note</button>
             <button onClick={() => setTab('Files')}><Icon name="rooms" size={15} /> Add file</button>
-            <button onClick={() => setTab('Discussions')}><Icon name="team" size={15} /> Start discussion</button>
+            <button onClick={() => setTab('Chat')}><Icon name="team" size={15} /> Open chat</button>
             <button onClick={() => setTab('Decisions')}><Icon name="completed" size={15} /> Log decision</button>
           </div>
 
@@ -53,7 +54,7 @@ export default function RoomView({ store, room, user, onSelect, selectedId }) {
           <div className="room-summary">
             <div className="rs-row"><b>{open.length}</b> open task{open.length === 1 ? '' : 's'}{open.length > 0 && <span className="rs-list"> — {open.slice(0, 5).map((t) => t.title).join(', ')}{open.length > 5 ? '…' : ''}</span>}</div>
             <div className="rs-row"><b>{done.length}</b> completed</div>
-            <div className="rs-row"><b>{decisions.length}</b> decision{decisions.length === 1 ? '' : 's'} logged · <b>{threads.length}</b> discussion{threads.length === 1 ? '' : 's'} · <b>{files.length}</b> file{files.length === 1 ? '' : 's'}</div>
+            <div className="rs-row"><b>{decisions.length}</b> decision{decisions.length === 1 ? '' : 's'} logged · <b>{messages.length}</b> chat message{messages.length === 1 ? '' : 's'} · <b>{files.length}</b> file{files.length === 1 ? '' : 's'}</div>
             <div className="rs-row"><b>{members.length}</b> member{members.length === 1 ? '' : 's'} — {members.map((m) => m.name || m.email).join(', ')}</div>
             <div className="rs-row rs-muted">Computed from room data — no AI.</div>
           </div>
@@ -68,7 +69,7 @@ export default function RoomView({ store, room, user, onSelect, selectedId }) {
       )}
 
       {tab === 'Notes' && <RoomNotes store={store} room={room} />}
-      {tab === 'Discussions' && <RoomDiscussions store={store} room={room} user={user} />}
+      {tab === 'Chat' && <RoomChat store={store} room={room} user={user} members={members} messages={messages} />}
       {tab === 'Decisions' && <RoomDecisions store={store} room={room} user={user} />}
       {tab === 'Files' && <RoomFiles store={store} room={room} />}
       {tab === 'Members' && <Members store={store} room={room} members={members} />}
@@ -112,52 +113,83 @@ function RoomNotes({ store, room }) {
   );
 }
 
-/* ---------- Discussions ---------- */
-function RoomDiscussions({ store, room, user }) {
+/* ---------- Chat ---------- */
+function RoomChat({ store, room, user, members, messages }) {
   const [text, setText] = useState('');
-  const all = store.data.discussions.filter((d) => d.team_id === room.id);
-  const threads = all.filter((d) => !d.parent_id).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
   const author = user?.name || user?.email;
+  const sorted = [...messages].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
+  const endRef = useRef(null);
+  const lastSeen = useRef('');
 
-  function post(e) { e.preventDefault(); const v = text.trim(); if (!v) return; store.addDiscussion(room.id, v, author); setText(''); }
+  // fast-poll this room's messages while the Chat tab is open (~3.5s)
+  useEffect(() => {
+    let alive = true;
+    async function poll() {
+      try {
+        const since = store.data.messages.filter((m) => m.team_id === room.id)
+          .map((m) => m.created_at).sort().slice(-1)[0] || '';
+        const r = await fetchRoomMessages(room.id, since);
+        if (alive && r && r.messages) store.mergeMessages(r.messages);
+      } catch { /* offline — the 20s full sync will catch up */ }
+    }
+    const id = setInterval(poll, 3500);
+    poll();
+    return () => { alive = false; clearInterval(id); };
+  }, [room.id]); // eslint-disable-line
+
+  // mark read + keep scrolled to the newest message
+  useEffect(() => {
+    const newest = sorted.length ? sorted[sorted.length - 1].created_at : '';
+    if (newest !== lastSeen.current) {
+      lastSeen.current = newest;
+      markRoomRead(room.id, newest || new Date().toISOString());
+      endRef.current?.scrollIntoView({ block: 'end' });
+    }
+  }); // run every render; cheap guard above prevents churn
+
+  function send(e) {
+    e.preventDefault();
+    const v = text.trim();
+    if (!v) return;
+    store.addMessage(room.id, v, author);
+    setText('');
+  }
+
+  const mentionables = members.filter((m) => m.user_id).map((m) => (m.name || m.email || '').replace(/\s+/g, '')).filter(Boolean);
 
   return (
-    <div className="room-pane">
-      <form className="disc-new" onSubmit={post}>
-        <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Start a discussion…" />
-        <button className="btn-primary" disabled={!text.trim()}>Post</button>
+    <div className="chat">
+      <div className="chat-stream">
+        {sorted.length === 0 && <div className="placeholder">No messages yet. Say hello 👋</div>}
+        {sorted.map((m, i) => {
+          const mine = m.user_id === user?.id || (!m.user_id && m.author === author);
+          const prev = sorted[i - 1];
+          const grouped = prev && prev.author === m.author && (new Date(m.created_at) - new Date(prev.created_at)) < 4 * 60000;
+          return (
+            <div key={m.id} className={`chat-msg ${mine ? 'mine' : ''} ${grouped ? 'grouped' : ''}`}>
+              {!grouped && <span className="avatar sm chat-av">{(m.author || '?').slice(0, 1).toUpperCase()}</span>}
+              <div className="chat-bubble-wrap">
+                {!grouped && <div className="chat-meta"><b>{m.author || 'Someone'}</b> <span>{when(m.created_at)}</span></div>}
+                <div className="chat-bubble">{renderBody(m.body)}{mine && <button className="chat-del" title="Delete" onClick={() => store.deleteMessage(m.id)}>✕</button>}</div>
+              </div>
+            </div>
+          );
+        })}
+        <div ref={endRef} />
+      </div>
+      <form className="chat-input" onSubmit={send}>
+        <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Message the room…  (@name to notify)" />
+        <button className="btn-primary" disabled={!text.trim()}><Icon name="upcoming" size={16} /></button>
       </form>
-      {threads.length === 0 && <div className="placeholder">No discussions yet.</div>}
-      {threads.map((th) => (
-        <Thread key={th.id} thread={th} replies={all.filter((d) => d.parent_id === th.id)} store={store} room={room} author={author} />
-      ))}
+      {mentionables.length > 0 && <div className="chat-hint">Tip: type <b>@{mentionables[0]}</b> to notify a teammate by email + push.</div>}
     </div>
   );
 }
-function Thread({ thread, replies, store, room, author }) {
-  const [reply, setReply] = useState('');
-  function send(e) { e.preventDefault(); const v = reply.trim(); if (!v) return; store.addDiscussion(room.id, v, author, thread.id); setReply(''); }
-  return (
-    <div className="thread">
-      <div className="msg">
-        <span className="avatar sm">{(thread.author || '?').slice(0, 1).toUpperCase()}</span>
-        <div className="msg-body"><div className="msg-head"><b>{thread.author || 'Someone'}</b> <span>{when(thread.created_at)}</span>
-          <button className="act danger small" onClick={() => store.deleteDiscussion(thread.id)}>✕</button></div>
-          <div className="msg-text">{thread.body}</div></div>
-      </div>
-      <div className="replies">
-        {replies.sort((a, b) => (a.created_at || '').localeCompare(b.created_at || '')).map((r) => (
-          <div className="msg reply" key={r.id}>
-            <span className="avatar sm">{(r.author || '?').slice(0, 1).toUpperCase()}</span>
-            <div className="msg-body"><div className="msg-head"><b>{r.author || 'Someone'}</b> <span>{when(r.created_at)}</span></div><div className="msg-text">{r.body}</div></div>
-          </div>
-        ))}
-        <form className="reply-add" onSubmit={send}>
-          <input value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Reply…" />
-        </form>
-      </div>
-    </div>
-  );
+
+// Highlight @mentions in a message body.
+function renderBody(body) {
+  const parts = String(body || '').split(/(@[a-z0-9._-]+)/gi);
+  return parts.map((p, i) => (/^@[a-z0-9._-]+$/i.test(p) ? <span key={i} className="chat-mention">{p}</span> : p));
 }
 
 /* ---------- Decisions ---------- */
@@ -237,7 +269,7 @@ function Members({ store, room, members }) {
           <div className="member" key={m.id}>
             <span className="avatar sm">{(m.name || m.email || '?').slice(0, 1).toUpperCase()}</span>
             <div className="member-main">
-              <div className="member-name">{m.name || m.email}{!m.user_id && <span className="member-pending"> · invited</span>}</div>
+              <div className="member-name">{m.name || m.email}{m.status === 'pending' && <span className="member-pending"> · pending</span>}</div>
               <div className="member-email">{m.email}</div>
             </div>
             <span className={`role-badge ${m.role}`}>{m.role}</span>
@@ -260,8 +292,8 @@ function Members({ store, room, members }) {
       ) : (
         <form className="team-admin" onSubmit={invite}>
           <Icon name="plus" size={15} />
-          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Add member by email" />
-          <button className="btn-primary">Add</button>
+          <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Invite by email — they’ll get an accept link" />
+          <button className="btn-primary">Send invite</button>
           {msg && <span className="team-msg">{msg}</span>}
           {err && <span className="team-err">{err}</span>}
         </form>

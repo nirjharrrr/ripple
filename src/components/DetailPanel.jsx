@@ -85,6 +85,15 @@ export default function DetailPanel({ store, task, user, onClose }) {
                 {store.data.goals.map((g) => <option key={g.id} value={g.id}>{g.title}</option>)}
               </select>
             </Field>
+            <Field label="Depends on">
+              <select value={task.depends_on || ''} onChange={(e) => set({ depends_on: e.target.value })}>
+                <option value="">Nothing (start of chain)</option>
+                {store.data.tasks.filter((t) => !t.archived && t.id !== task.id && t.depends_on !== task.id).map((t) => (
+                  <option key={t.id} value={t.id}>{t.title}</option>
+                ))}
+              </select>
+            </Field>
+            <ChainInfo store={store} task={task} />
             <Field label="Effort">
               <select value={task.effort || ''} onChange={(e) => set({ effort: e.target.value })}>
                 {EFFORTS.map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}
@@ -153,6 +162,19 @@ function TitleEdit({ task, set }) {
   );
 }
 
+function ChainInfo({ store, task }) {
+  const prereq = task.depends_on ? store.data.tasks.find((t) => t.id === task.depends_on) : null;
+  const locked = prereq && !prereq.done && !task.done;
+  const unlocks = store.data.tasks.filter((t) => t.depends_on === task.id && !t.archived);
+  if (!locked && unlocks.length === 0) return null;
+  return (
+    <div className="chain-info">
+      {locked && <div className="chain-locked">🔒 Locked until “{prereq.title}” is done</div>}
+      {unlocks.length > 0 && <div className="chain-unlocks">Completing this unlocks: {unlocks.map((u) => u.title).join(', ')}</div>}
+    </div>
+  );
+}
+
 function AssigneeSelect({ store, task, user, set }) {
   const members = [];
   const seen = new Set();
@@ -170,7 +192,8 @@ function AssigneeSelect({ store, task, user, set }) {
     const uid = e.target.value;
     if (!uid) { set({ assignee_id: '' }); return; }
     const m = members.find((x) => x.user_id === uid);
-    set({ assignee_id: uid, team_id: m?.team_id || task.team_id || '' });
+    // assignTask updates the task AND notifies the assignee (email + push), unless it's you
+    store.assignTask(task.id, uid, m?.team_id || task.team_id || '');
   }
 
   return (
