@@ -179,6 +179,7 @@ function AssigneeSelect({ store, task, user, set }) {
   const members = [];
   const seen = new Set();
   for (const m of store.data.memberships || []) {
+    if (m.status === 'pending') continue; // can't assign to someone who hasn't joined
     if (m.user_id && !seen.has(m.user_id)) { seen.add(m.user_id); members.push(m); }
   }
   if (user && !seen.has(user.id)) members.unshift({ user_id: user.id, name: user.name, email: user.email, team_id: '' });
