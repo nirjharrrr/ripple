@@ -701,3 +701,19 @@ html[data-theme="dark"] .ripple-logo-img { background: #fff; border-radius: 9px;
   border-radius: 16px; cursor: pointer; }
 .chat-mute:hover { border-color: var(--accent); color: var(--accent); }
 .chat-mute.on { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+
+/* Settings — danger zone */
+.set-danger { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.dz-reveal { border: 0; background: transparent; color: var(--danger); font-size: 13px; cursor: pointer; padding: 4px 0; }
+.dz-reveal:hover { text-decoration: underline; }
+.dz-box { border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--line)); border-radius: var(--radius);
+  padding: 14px; background: color-mix(in srgb, var(--danger) 5%, transparent); }
+.dz-title { font-size: 14px; font-weight: 700; color: var(--danger); margin-bottom: 6px; }
+.dz-text { font-size: 13px; color: var(--ink-soft); line-height: 1.45; margin-bottom: 12px; }
+.dz-actions { display: flex; align-items: center; gap: 8px; }
+.dz-input { flex: 1; border: 1px solid var(--line); border-radius: 7px; padding: 7px 10px; font: inherit; font-size: 13px;
+  background: var(--bg); color: var(--ink); outline: none; letter-spacing: .08em; }
+.dz-input:focus { border-color: var(--danger); }
+.dz-confirm { border: 0; background: var(--danger); color: #fff; font-size: 13px; font-weight: 600;
+  padding: 8px 14px; border-radius: 7px; cursor: pointer; white-space: nowrap; }
+.dz-confirm:disabled { opacity: .5; cursor: not-allowed; }

@@ -76,6 +76,14 @@ export async function logout() {
   localStorage.removeItem(QUEUE_KEY);
 }
 
+// Permanently delete the signed-in account + all its data, then wipe local state.
+export async function deleteAccount() {
+  await call({ action: 'deleteAccount' }); // throws if it fails — caller surfaces it
+  clearSession();
+  localStorage.removeItem(CACHE_KEY);
+  localStorage.removeItem(QUEUE_KEY);
+}
+
 // --- local cache ------------------------------------------------------------
 const EMPTY = { tasks: [], subtasks: [], projects: [], notes: [], goals: [], habits: [], comments: [], teams: [], memberships: [], invites: [], decisions: [], discussions: [], files: [], messages: [] };
 

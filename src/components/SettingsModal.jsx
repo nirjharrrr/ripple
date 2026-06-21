@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { getPrefs, setPrefs } from '../lib/settings';
-import { currentUser } from '../lib/api';
+import { currentUser, deleteAccount } from '../lib/api';
 import { pushSupported, isPushOn, enablePush } from '../lib/push';
 
 export default function SettingsModal({ onClose }) {
@@ -8,6 +8,21 @@ export default function SettingsModal({ onClose }) {
   const user = currentUser();
   const [pushState, setPushState] = useState('checking'); // checking | on | off | busy | unsupported
   const [pushErr, setPushErr] = useState('');
+  const [dz, setDz] = useState(false);        // danger zone revealed
+  const [confirm, setConfirm] = useState('');
+  const [delErr, setDelErr] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
+  async function removeAccount() {
+    setDelErr(''); setDeleting(true);
+    try {
+      await deleteAccount();
+      window.location.assign('/'); // session is gone → app boots to the login screen
+    } catch (e) {
+      setDelErr(String(e.message || e).replace(/^Error:\s*/, ''));
+      setDeleting(false);
+    }
+  }
 
   useEffect(() => {
     if (!pushSupported()) { setPushState('unsupported'); return; }
@@ -55,6 +70,28 @@ export default function SettingsModal({ onClose }) {
         <div className="set-row">
           <span className="set-label">Timezone</span>
           <span className="set-val">{Intl.DateTimeFormat().resolvedOptions().timeZone}</span>
+        </div>
+
+        <div className="set-danger">
+          {!dz ? (
+            <button className="dz-reveal" onClick={() => setDz(true)}>Delete account…</button>
+          ) : (
+            <div className="dz-box">
+              <div className="dz-title">Delete account</div>
+              <div className="dz-text">
+                This permanently deletes your account and <b>all your data</b> — tasks, notes, rooms you own,
+                messages, and memberships. This cannot be undone. Type <b>DELETE</b> to confirm.
+              </div>
+              <div className="dz-actions">
+                <input className="dz-input" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="DELETE" autoFocus />
+                <button className="btn-ghost" onClick={() => { setDz(false); setConfirm(''); setDelErr(''); }} disabled={deleting}>Cancel</button>
+                <button className="dz-confirm" onClick={removeAccount} disabled={confirm !== 'DELETE' || deleting}>
+                  {deleting ? 'Deleting…' : 'Delete forever'}
+                </button>
+              </div>
+              {delErr && <div className="auth-error">{delErr}</div>}
+            </div>
+          )}
         </div>
       </div>
     </div>
