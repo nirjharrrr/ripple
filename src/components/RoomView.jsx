@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { verifyAdmin, addMember, removeMember, setRole, fetchRoomMessages } from '../lib/api';
 import { markRoomRead } from '../lib/chat';
+import { renderMarkdown } from '../lib/markdown';
 import TaskList from './TaskList';
 import Icon from './Icon';
 
@@ -101,14 +102,31 @@ function RoomNotes({ store, room }) {
             <span className="room-note-when">{n.updated_at ? when(n.updated_at) : ''}</span>
             <button className="act danger small" onClick={(e) => { e.stopPropagation(); store.deleteNote(n.id); }}>✕</button>
           </div>
-          {openId === n.id && (
-            <div className="room-note-body">
-              <input className="note-title-input" defaultValue={n.title} onBlur={(e) => e.target.value !== n.title && store.updateNote(n.id, { title: e.target.value })} placeholder="Title" />
-              <textarea className="note-body-input" defaultValue={n.body || ''} onBlur={(e) => e.target.value !== (n.body || '') && store.updateNote(n.id, { body: e.target.value })} placeholder="Write… (Markdown supported)" />
-            </div>
-          )}
+          {openId === n.id && <RoomNoteBody note={n} store={store} />}
         </div>
       ))}
+    </div>
+  );
+}
+
+function RoomNoteBody({ note, store }) {
+  const [body, setBody] = useState(note.body || '');
+  const [editing, setEditing] = useState(!(note.body || '').trim());
+  function saveBody() { if (body !== (note.body || '')) store.updateNote(note.id, { body }); }
+  return (
+    <div className="room-note-body">
+      <div className="note-edit-toolbar">
+        <input className="note-title-input" defaultValue={note.title} onBlur={(e) => e.target.value !== note.title && store.updateNote(note.id, { title: e.target.value })} placeholder="Title" />
+        <div className="seg note-seg">
+          <button className={editing ? 'on' : ''} onClick={() => setEditing(true)}>Write</button>
+          <button className={!editing ? 'on' : ''} onClick={() => { saveBody(); setEditing(false); }}>Preview</button>
+        </div>
+      </div>
+      {editing ? (
+        <textarea className="note-body-input" value={body} onChange={(e) => setBody(e.target.value)} onBlur={saveBody} placeholder="Write… (Markdown — # headings, - lists, **bold**, [link](url))" />
+      ) : (
+        <div className="note-rendered md" onClick={() => setEditing(true)} dangerouslySetInnerHTML={{ __html: renderMarkdown(body) || '<p class="dp-muted">Nothing yet — click to write.</p>' }} />
+      )}
     </div>
   );
 }

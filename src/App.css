@@ -717,3 +717,20 @@ html[data-theme="dark"] .ripple-logo-img { background: #fff; border-radius: 9px;
 .dz-confirm { border: 0; background: var(--danger); color: #fff; font-size: 13px; font-weight: 600;
   padding: 8px 14px; border-radius: 7px; cursor: pointer; white-space: nowrap; }
 .dz-confirm:disabled { opacity: .5; cursor: not-allowed; }
+
+/* Markdown-rendered notes */
+.note-seg { margin: 0 8px; }
+.note-seg button { font-size: 12px; padding: 4px 10px; }
+.note-rendered { flex: 1; overflow-y: auto; padding: 6px 2px; font-size: 14.5px; line-height: 1.6; color: var(--ink); cursor: text; }
+.md h1, .md h2, .md h3, .md h4 { line-height: 1.25; margin: 14px 0 6px; font-weight: 700; letter-spacing: -.01em; }
+.md h1 { font-size: 22px; } .md h2 { font-size: 18px; } .md h3 { font-size: 15.5px; } .md h4 { font-size: 14px; color: var(--ink-soft); }
+.md p { margin: 8px 0; }
+.md ul, .md ol { margin: 8px 0; padding-left: 22px; }
+.md li { margin: 3px 0; }
+.md a { color: var(--accent); text-decoration: none; }
+.md a:hover { text-decoration: underline; }
+.md code { background: var(--line-soft); border-radius: 4px; padding: 1px 5px; font-size: 13px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+.md blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--accent); color: var(--ink-soft); }
+.md strong { font-weight: 700; } .md em { font-style: italic; }
+.md > :first-child { margin-top: 0; }
