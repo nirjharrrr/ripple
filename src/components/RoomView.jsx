@@ -140,6 +140,20 @@ function RoomChat({ store, room, user, members, messages }) {
   const sorted = [...messages].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''));
   const endRef = useRef(null);
   const lastSeen = useRef('');
+  const inputRef = useRef(null);
+  const [mention, setMention] = useState(null); // { query, index } while typing "@…"
+
+  // members you can @-mention (accepted, have an account)
+  const mentionMembers = members.filter((m) => m.user_id);
+  const mentionToken = (m) => (m.name ? m.name.replace(/\s+/g, '') : (m.email || '').split('@')[0]);
+  const suggestions = mention
+    ? mentionMembers.filter((m) => {
+        const name = (m.name || '').toLowerCase().replace(/\s+/g, '');
+        const local = (m.email || '').toLowerCase().split('@')[0];
+        return name.startsWith(mention.query) || local.startsWith(mention.query);
+      }).slice(0, 6)
+    : [];
+  const activeIdx = mention ? Math.min(mention.index, Math.max(0, suggestions.length - 1)) : 0;
 
   // fast-poll this room's messages while the Chat tab is open (~3.5s)
   useEffect(() => {
@@ -173,9 +187,36 @@ function RoomChat({ store, room, user, members, messages }) {
     if (!v) return;
     store.addMessage(room.id, v, author);
     setText('');
+    setMention(null);
   }
 
-  const mentionables = members.filter((m) => m.user_id).map((m) => (m.name || m.email || '').replace(/\s+/g, '')).filter(Boolean);
+  function onChange(e) {
+    const v = e.target.value;
+    setText(v);
+    const caret = e.target.selectionStart ?? v.length;
+    const m = v.slice(0, caret).match(/@([\p{L}0-9._-]*)$/u); // active "@token" right before the caret
+    setMention(m ? { query: m[1].toLowerCase(), index: 0 } : null);
+  }
+
+  function applyMention(m) {
+    const input = inputRef.current;
+    const caret = input ? (input.selectionStart ?? text.length) : text.length;
+    const before = text.slice(0, caret).replace(/@([\p{L}0-9._-]*)$/u, '@' + mentionToken(m) + ' ');
+    const next = before + text.slice(caret);
+    setText(next);
+    setMention(null);
+    requestAnimationFrame(() => { if (input) { input.focus(); input.setSelectionRange(before.length, before.length); } });
+  }
+
+  function onKeyDown(e) {
+    if (!suggestions.length) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setMention((s) => ({ ...s, index: (activeIdx + 1) % suggestions.length })); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setMention((s) => ({ ...s, index: (activeIdx - 1 + suggestions.length) % suggestions.length })); }
+    else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); applyMention(suggestions[activeIdx]); }
+    else if (e.key === 'Escape') { setMention(null); }
+  }
+
+  const mentionables = mentionMembers.map(mentionToken).filter(Boolean);
 
   return (
     <div className="chat">
@@ -204,7 +245,20 @@ function RoomChat({ store, room, user, members, messages }) {
         <div ref={endRef} />
       </div>
       <form className="chat-input" onSubmit={send}>
-        <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Message the room…  (@name to notify)" />
+        {suggestions.length > 0 && (
+          <div className="mention-pop">
+            {suggestions.map((m, i) => (
+              <button type="button" key={m.user_id} className={`mention-opt ${i === activeIdx ? 'on' : ''}`}
+                onMouseDown={(e) => { e.preventDefault(); applyMention(m); }}>
+                <span className="avatar sm">{(m.name || m.email || '?').slice(0, 1).toUpperCase()}</span>
+                <span className="mention-name">{m.name || m.email}</span>
+                <span className="mention-handle">@{mentionToken(m)}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <input ref={inputRef} value={text} onChange={onChange} onKeyDown={onKeyDown}
+          onBlur={() => setTimeout(() => setMention(null), 120)} placeholder="Message the room…  (@name to notify)" />
         <button className="btn-primary" disabled={!text.trim()}><Icon name="upcoming" size={16} /></button>
       </form>
       {mentionables.length > 0 && <div className="chat-hint">Tip: type <b>@{mentionables[0]}</b> to notify a teammate by email + push.</div>}
