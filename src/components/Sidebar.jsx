@@ -79,6 +79,9 @@ export default function Sidebar({ store, view, onSelectView, query, onQuery, use
       <div className="sb-section">
         <div className="sb-section-head">
           <button className="sb-section-link" onClick={() => onSelectView({ type: 'rooms' })}>Rooms</button>
+          {(data.invites || []).length > 0 && (
+            <span className="sb-invite-pill" title={`${data.invites.length} pending invitation(s)`}>{data.invites.length} invite{data.invites.length === 1 ? '' : 's'}</span>
+          )}
           <button className="sb-add" onClick={() => onSelectView({ type: 'rooms', create: true })}><Icon name="plus" size={14} /></button>
         </div>
         {rooms.map((r) => (
