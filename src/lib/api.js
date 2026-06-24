@@ -170,6 +170,8 @@ export async function acceptInvite(invite_token) { return call({ action: 'accept
 export async function declineInvite(invite_token) { return call({ action: 'declineInvite', invite_token }); }
 // Fast-poll a room's messages created after `since` (ISO) — used while the Chat tab is open.
 export async function fetchRoomMessages(team_id, since) { return call({ action: 'roomMessages', team_id, since }); }
+// Upload a file's bytes to the owner's Drive; returns { name, url }. Direct (not queued) — caller needs the URL.
+export async function uploadFile(team_id, name, dataBase64, mimeType) { return call({ action: 'uploadFile', file: { team_id, name, dataBase64, mimeType } }); }
 
 export async function ping() {
   return call({ action: 'ping' });

@@ -143,6 +143,7 @@ function handle(e) {
     if (action === 'acceptInvite')   return json(acceptInvite(body.invite_token, userId));
     if (action === 'declineInvite')  return json(declineInvite(body.invite_token, userId));
     if (action === 'notifyAssignment') return json(notifyAssignment(body.task_id, body.assignee_id, userId, teamSet));
+    if (action === 'uploadFile')     return json(uploadFile(body.file, userId, teamSet));
     if (action === 'upsertMessage')  return json({ ok: true, data: postMessage(body.message, userId, teamSet) });
     if (action === 'deleteMessage')  return json({ ok: true, data: deleteRoomEntity(MESSAGE_SHEET, MESSAGE_COLS, body.id, userId, teamSet) });
     if (action === 'roomMessages')   return json({ ok: true, data: roomMessages(body.team_id, body.since, userId, teamSet) });
@@ -746,6 +747,36 @@ function notifyAssignment(taskId, assigneeId, userId, teamSet) {
   var who = assigner ? (assigner.name || assigner.email) : 'Someone';
   notifyUser(assigneeId, '📌 New task assigned: ' + task.title, who + ' assigned you “' + task.title + '” in Ripple.');
   return { ok: true, data: 'notified' };
+}
+
+// ---------------------------------------------------------------------------
+// File uploads — store the bytes in the owner's Google Drive (free) and return
+// a shareable link. Member-gated. Requires the Drive scope: run authorizeDrive()
+// once from the editor before deploying a version that includes this.
+// ---------------------------------------------------------------------------
+function uploadFile(f, userId, teamSet) {
+  f = f || {};
+  if (!f.team_id || !teamSet[String(f.team_id)]) return { ok: false, error: 'forbidden' };
+  if (!f.dataBase64) return { ok: false, error: 'no file data' };
+  try {
+    var bytes = Utilities.base64Decode(f.dataBase64);
+    var blob = Utilities.newBlob(bytes, f.mimeType || 'application/octet-stream', f.name || 'upload');
+    var file = getUploadsFolder().createFile(blob);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return { ok: true, data: { name: f.name || file.getName(), url: file.getUrl() } };
+  } catch (e) { return { ok: false, error: 'upload failed: ' + e }; }
+}
+
+function getUploadsFolder() {
+  var it = DriveApp.getFoldersByName('Ripple Uploads');
+  return it.hasNext() ? it.next() : DriveApp.createFolder('Ripple Uploads');
+}
+
+// One-time: run this from the Apps Script editor to grant the Drive scope.
+// Touching DriveApp forces Google's consent prompt for the new permission.
+function authorizeDrive() {
+  DriveApp.getRootFolder().getName();
+  return 'Drive authorized — you can now deploy file uploads.';
 }
 
 // ---------------------------------------------------------------------------

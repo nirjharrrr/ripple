@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { verifyAdmin, addMember, removeMember, setRole, fetchRoomMessages } from '../lib/api';
+import { verifyAdmin, addMember, removeMember, setRole, fetchRoomMessages, uploadFile } from '../lib/api';
 import { markRoomRead } from '../lib/chat';
 import { renderMarkdown } from '../lib/markdown';
 import TaskList from './TaskList';
@@ -298,24 +298,58 @@ function RoomDecisions({ store, room, user }) {
   );
 }
 
-/* ---------- Files (links) ---------- */
+/* ---------- Files (upload to Drive, or paste a link) ---------- */
+const MAX_UPLOAD = 8 * 1024 * 1024; // 8 MB — keeps the base64 POST within Apps Script limits
+
 function RoomFiles({ store, room }) {
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
+  const [busy, setBusy] = useState('');   // current upload filename
+  const [err, setErr] = useState('');
+  const fileRef = useRef(null);
   const files = store.data.files.filter((f) => f.team_id === room.id).sort((a, b) => (b.created_at || '').localeCompare(a.created_at || ''));
   function add(e) {
     e.preventDefault(); let u = url.trim(); if (!u) return;
     if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
     store.addFile(room.id, name.trim() || u, u); setName(''); setUrl('');
   }
+  async function onPick(e) {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ''; // allow re-picking the same file
+    if (!file) return;
+    setErr('');
+    if (file.size > MAX_UPLOAD) { setErr(`“${file.name}” is ${(file.size / 1048576).toFixed(1)} MB — uploads are capped at 8 MB. Paste a link instead.`); return; }
+    setBusy(file.name);
+    try {
+      const dataBase64 = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onerror = () => reject(new Error('could not read file'));
+        r.onload = () => resolve(String(r.result).split(',')[1] || '');
+        r.readAsDataURL(file);
+      });
+      const res = await uploadFile(room.id, file.name, dataBase64, file.type);
+      if (res && res.url) store.addFile(room.id, res.name || file.name, res.url);
+      else setErr('Upload failed — the room owner may need to authorize Drive.');
+    } catch (e2) {
+      setErr(String(e2.message || e2).replace(/^Error:\s*/, ''));
+    } finally { setBusy(''); }
+  }
   return (
     <div className="room-pane">
+      <div className="file-actions">
+        <button className="btn-primary" onClick={() => fileRef.current?.click()} disabled={!!busy}>
+          <Icon name="plus" size={14} /> {busy ? `Uploading ${busy}…` : 'Upload file'}
+        </button>
+        <input ref={fileRef} type="file" hidden onChange={onPick} />
+        <span className="file-or">or paste a link</span>
+      </div>
       <form className="file-new" onSubmit={add}>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Label (optional)" />
         <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="Paste a link (Drive, Figma, doc…)" />
-        <button className="btn-primary" disabled={!url.trim()}>Add</button>
+        <button className="btn-ghost" disabled={!url.trim()}>Add link</button>
       </form>
-      {files.length === 0 && <div className="placeholder">No files yet. Paste a shared link (direct uploads need Google Drive).</div>}
+      {err && <div className="auth-error">{err}</div>}
+      {files.length === 0 && <div className="placeholder">No files yet. Upload a file (≤8 MB) or paste a shared link.</div>}
       {files.map((f) => (
         <div className="file-row" key={f.id}>
           <Icon name="notes" size={15} />
